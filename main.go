@@ -22,6 +22,7 @@ type apiConfig struct{
 	fileServerHits atomic.Int32
 	dbQueries *database.Queries
 	PLATFORM string
+	JWT_SECRET string
 }
 
 func (ac *apiConfig) middleWareMetricsInc(next http.Handler) http.Handler{
@@ -109,6 +110,37 @@ func (ac *apiConfig) validate_chirp(w http.ResponseWriter,req *http.Request){
 		}
 	}
 	params.Body=strings.Join(arrBody," ")
+
+	bearerToken,err:=auth.GetBearerToken(req.Header)
+
+	if err!=nil{
+		log.Println(err)
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(500)
+		w.Write([]byte(dat))
+		return 
+	}
+
+	_,err1:=auth.ValidateJWT(bearerToken,ac.JWT_SECRET)
+
+	if err1!=nil{
+		log.Println(err1)
+		respError.Error+=": Invalid token"
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write([]byte(dat))
+		return 
+	}
 
 	dat,err:=ac.dbQueries.CreateChirp(req.Context(),params)
 
@@ -297,6 +329,7 @@ func (ac *apiConfig) loginFunc(w http.ResponseWriter,req *http.Request){
 	type requestBody struct{
 		Email string `json:"email"`
 		Password string `json:"password"`
+		Expires_in_seconds int `json:"expires_in_second"`
 	}
 	type returnError struct{
 		Error string `json:"error"`
@@ -334,6 +367,11 @@ func (ac *apiConfig) loginFunc(w http.ResponseWriter,req *http.Request){
 		return 
 	}
 
+	if params.Expires_in_seconds==0 || params.Expires_in_seconds>3600{
+		params.Expires_in_seconds=3600 
+	}
+
+
 	users,err:=ac.dbQueries.GetOneUserByEmail(req.Context(),params.Email)
 
 	if err!=nil{
@@ -349,6 +387,7 @@ func (ac *apiConfig) loginFunc(w http.ResponseWriter,req *http.Request){
 		return 
 	}
 
+
 	err=auth.CheckPasswordHash(users.HashedPassword,params.Password)
 
 	if err!=nil{
@@ -363,15 +402,27 @@ func (ac *apiConfig) loginFunc(w http.ResponseWriter,req *http.Request){
 		return
 	}
 
+	token,err:=auth.MakeJWT(int(users.ID),ac.JWT_SECRET,time.Duration(params.Expires_in_seconds)*time.Second)
+
+	if err!=nil{
+		respError.Error+=err.Error()
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return	
+		}
+		w.WriteHeader(500)
+		w.Write(dat)
+	}
 	w.WriteHeader(200)
-
-
 	type response2 struct{
 		ID             int32 `json:"id"`
 		Email          string `json:"email"`
 		CreatedAt      time.Time `json:"created_at"`
 		UpdatedAt      time.Time `json:"updated_at"`
 		hashedPassword string 
+		Token string `json:"token"`
 	}
 
 	userDetails:=response2{}
@@ -381,6 +432,7 @@ func (ac *apiConfig) loginFunc(w http.ResponseWriter,req *http.Request){
 	userDetails.CreatedAt=users.CreatedAt
 	userDetails.UpdatedAt=users.UpdatedAt
 	userDetails.hashedPassword=users.HashedPassword
+	userDetails.Token=token
 
 	dat,err:=json.Marshal(userDetails)
 
@@ -396,6 +448,8 @@ func (ac *apiConfig) loginFunc(w http.ResponseWriter,req *http.Request){
 func main(){
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
+	jwtSecret:=os.Getenv("JWT_SECRET")
+
 
 	db,err:=sql.Open("postgres",dbURL)
 
@@ -410,6 +464,7 @@ func main(){
 	}
 	ac:=apiConfig{}
 	ac.dbQueries=dbQueries
+	ac.JWT_SECRET=jwtSecret
 	ac.PLATFORM=os.Getenv("PLATFORM")
 	mux.Handle("/app/",ac.middleWareMetricsInc(http.StripPrefix("/app",http.FileServer(http.Dir(".")))))
 
