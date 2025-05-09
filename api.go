@@ -379,6 +379,12 @@ func (acg *apiConfig) createUser(w http.ResponseWriter,req *http.Request){
 
 	users,err:=acg.dbQueries.CreateUser(req.Context(),rs)
 
+	if err!=nil{
+		log.Println("Error in Creating user:",err)
+		w.WriteHeader(500)
+		return 
+	}
+
 	type response struct{
 		ID             int32 `json:"id"`
 		Email          string `json:"email"`
@@ -395,11 +401,146 @@ func (acg *apiConfig) createUser(w http.ResponseWriter,req *http.Request){
 	userDetails.UpdatedAt=users.UpdatedAt
 	userDetails.hashedPassword=users.HashedPassword
 
+	
+
+	dat,err:=json.Marshal(userDetails)
 	if err!=nil{
-		log.Println("Error in Creating user:",err)
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.WriteHeader(201)
+	w.Write([]byte(dat))
+
+}
+
+func (ac *apiConfig) updateUserInfo(w http.ResponseWriter,req *http.Request){
+	type returnError struct{
+		Error string `json:"error"`
+	}
+	respError:=returnError{
+		Error: "Something went wrong",
+	}
+
+	bearerToken,err:=auth.GetBearerToken(req.Header)
+
+	if err!=nil{
+		log.Println(err)
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(500)
+		w.Write([]byte(dat))
+		return 
+	}
+
+	userid,err1:=auth.ValidateJWT(bearerToken,ac.JWT_SECRET)
+
+	if err1!=nil{
+		log.Println(err1)
+		respError.Error+=": Invalid token"
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write([]byte(dat))
+		return 
+	}
+
+	type reqBody struct{
+		Email string `json:"email"`
+		Password string `json:"password"`
+	}
+	r:=reqBody{}
+	decoder:=json.NewDecoder(req.Body)
+	err=decoder.Decode(&r)
+
+	if err!=nil{
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(500)
+		w.Write([]byte(dat))
+		return 
+	}
+	if r.Email==""{
+		respError.Error+=": Email is not there"
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(500)
+		w.Write([]byte(dat))
+		return 
+	}
+	if r.Password==""{
+		respError.Error+=": Password is not there"
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(500)
+		w.Write([]byte(dat))
+		return 
+	}
+
+	rs:=database.UpdateUsersParams{}
+	rs.Email=r.Email
+	rs.ID=int32(userid)
+	rs.HashedPassword,err=auth.HashPassword(r.Password)
+	rs.UpdatedAt=time.Now()
+	if err!=nil{
+		respError.Error+=err.Error()
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(500)
+		w.Write([]byte(dat))
+		return 
+	}
+
+	users,err:=ac.dbQueries.UpdateUsers(req.Context(),rs)
+
+	if err!=nil{
+		log.Println("Error in Updating user:",err)
 		w.WriteHeader(500)
 		return 
 	}
+
+	type response struct{
+		ID             int32 `json:"id"`
+		Email          string `json:"email"`
+		CreatedAt      time.Time `json:"created_at"`
+		UpdatedAt      time.Time `json:"updated_at"`
+		hashedPassword string 
+	}
+
+	userDetails:=response{}
+
+	userDetails.ID=users.ID
+	userDetails.Email=users.Email
+	userDetails.CreatedAt=users.CreatedAt
+	userDetails.UpdatedAt=users.UpdatedAt
+	userDetails.hashedPassword=users.HashedPassword
+
+	
 
 	dat,err:=json.Marshal(userDetails)
 	if err!=nil{

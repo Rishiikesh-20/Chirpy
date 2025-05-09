@@ -54,6 +54,8 @@ func main(){
 	mux.HandleFunc("POST /api/refresh",ac.GetNewToken)
 	mux.HandleFunc("POST /api/revoke",ac.revokeTheToken)
 
+	mux.HandleFunc("PUT /api/users",ac.updateUserInfo)
+
 	log.Println("Server started at port 8080")
 
 	err=http.ListenAndServe(server.Addr,server.Handler)

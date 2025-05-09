@@ -180,3 +180,32 @@ func (q *Queries) RevokeRefreshToken(ctx context.Context, token string) error {
 	_, err := q.db.ExecContext(ctx, revokeRefreshToken, token)
 	return err
 }
+
+const updateUsers = `-- name: UpdateUsers :one
+UPDATE users SET email=$1 , hashed_password=$2 , updated_at=$3 WHERE id=$4 RETURNING id, email, created_at, updated_at, hashed_password
+`
+
+type UpdateUsersParams struct {
+	Email          string
+	HashedPassword string
+	UpdatedAt      time.Time
+	ID             int32
+}
+
+func (q *Queries) UpdateUsers(ctx context.Context, arg UpdateUsersParams) (User, error) {
+	row := q.db.QueryRowContext(ctx, updateUsers,
+		arg.Email,
+		arg.HashedPassword,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HashedPassword,
+	)
+	return i, err
+}
