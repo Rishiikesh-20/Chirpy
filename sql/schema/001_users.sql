@@ -4,7 +4,8 @@ CREATE TABLE users(
     id SERIAL PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    hashed_password TEXT DEFAULT 'unset' NOT NULL
 );
 
 CREATE TABLE chirps(
@@ -15,4 +16,5 @@ CREATE TABLE chirps(
     user_id integer REFERENCES users(id) ON DELETE CASCADE NOT NULL
 );
 -- +goose Down
+DROP TABLE chirps;
 DROP TABLE users;

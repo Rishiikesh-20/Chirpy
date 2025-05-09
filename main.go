@@ -10,7 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"github.com/Rishiikesh-20/Chirpy/internal/auth"
 	"github.com/Rishiikesh-20/Chirpy/internal/database"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -131,6 +133,7 @@ func (ac *apiConfig) validate_chirp(w http.ResponseWriter,req *http.Request){
 func (acg *apiConfig) createUser(w http.ResponseWriter,req *http.Request){
 	type reqBody struct{
 		Email string `json:"email"`
+		Password string `json:"password"`
 	}
 	type returnError struct{
 		Error string `json:"error"`
@@ -155,7 +158,39 @@ func (acg *apiConfig) createUser(w http.ResponseWriter,req *http.Request){
 		return 
 	}
 
-	users,err:=acg.dbQueries.CreateUser(req.Context(),r.Email)
+	rs:=database.CreateUserParams{}
+	rs.Email=r.Email
+	rs.HashedPassword,err=auth.HashPassword(r.Password)
+	if err!=nil{
+		respError.Error+=err.Error()
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(500)
+		w.Write([]byte(dat))
+		return 
+	}
+
+	users,err:=acg.dbQueries.CreateUser(req.Context(),rs)
+
+	type response struct{
+		ID             int32 `json:"id"`
+		Email          string `json:"email"`
+		CreatedAt      time.Time `json:"created_at"`
+		UpdatedAt      time.Time `json:"updated_at"`
+		hashedPassword string 
+	}
+
+	userDetails:=response{}
+
+	userDetails.ID=users.ID
+	userDetails.Email=users.Email
+	userDetails.CreatedAt=users.CreatedAt
+	userDetails.UpdatedAt=users.UpdatedAt
+	userDetails.hashedPassword=users.HashedPassword
 
 	if err!=nil{
 		log.Println("Error in Creating user:",err)
@@ -163,7 +198,7 @@ func (acg *apiConfig) createUser(w http.ResponseWriter,req *http.Request){
 		return 
 	}
 
-	dat,err:=json.Marshal(users)
+	dat,err:=json.Marshal(userDetails)
 	if err!=nil{
 		log.Printf("Error marshalling JSON: %s", err)
 		w.WriteHeader(500)
@@ -258,6 +293,106 @@ func (ac *apiConfig) getAllChirps(w http.ResponseWriter,req *http.Request){
 	w.Write([]byte(dat))
 }
 
+func (ac *apiConfig) loginFunc(w http.ResponseWriter,req *http.Request){
+	type requestBody struct{
+		Email string `json:"email"`
+		Password string `json:"password"`
+	}
+	type returnError struct{
+		Error string `json:"error"`
+	}
+	type returnIncorrectEmail struct{
+		Error string `json:"error"`
+	}
+	type returnIncorrectPassword struct{
+		Error string `json:"error"`
+	}
+	respError:=returnError{
+		Error: "Something went wrong",
+	}
+	respEmail:=returnIncorrectEmail{
+		Error: "Incorrect Email",
+	}
+	respPassword:=returnIncorrectPassword{
+		Error: "Incorrect Password",
+	}
+	
+	params:=requestBody{}
+	decoder:=json.NewDecoder(req.Body)
+	err:=decoder.Decode(&params)
+
+	if err!=nil{
+		respError.Error+=err.Error()
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(500)
+		w.Write([]byte(dat))
+		return 
+	}
+
+	users,err:=ac.dbQueries.GetOneUserByEmail(req.Context(),params.Email)
+
+	if err!=nil{
+		log.Println(err)
+		dat,err:=json.Marshal(respEmail)
+		if err!=nil{
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write([]byte(dat))
+		return 
+	}
+
+	err=auth.CheckPasswordHash(users.HashedPassword,params.Password)
+
+	if err!=nil{
+		dat,err:=json.Marshal(respPassword)
+		if err!=nil{
+			log.Printf("Error marshalling JSON: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write([]byte(dat))
+		return
+	}
+
+	w.WriteHeader(200)
+
+
+	type response2 struct{
+		ID             int32 `json:"id"`
+		Email          string `json:"email"`
+		CreatedAt      time.Time `json:"created_at"`
+		UpdatedAt      time.Time `json:"updated_at"`
+		hashedPassword string 
+	}
+
+	userDetails:=response2{}
+
+	userDetails.ID=users.ID
+	userDetails.Email=users.Email
+	userDetails.CreatedAt=users.CreatedAt
+	userDetails.UpdatedAt=users.UpdatedAt
+	userDetails.hashedPassword=users.HashedPassword
+
+	dat,err:=json.Marshal(userDetails)
+
+	if err!=nil{
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Write(dat)
+}
+
 func main(){
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -293,6 +428,7 @@ func main(){
 	mux.HandleFunc("POST /admin/reset",ac.resetUsers)
 	mux.HandleFunc("POST /api/chirps",ac.validate_chirp)
 	mux.HandleFunc("POST /api/users",ac.createUser)
+	mux.HandleFunc("POST /api/login",ac.loginFunc)
 
 	
 

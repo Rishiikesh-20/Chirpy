@@ -1,5 +1,5 @@
 -- name: CreateUser :one
-INSERT INTO users (email,created_at,updated_at) VALUES($1,NOW(),NOW()) RETURNING *;
+INSERT INTO users (email,hashed_password,created_at,updated_at) VALUES($1,$2,NOW(),NOW()) RETURNING *;
 
 -- name: DeleteUser :exec
 DELETE FROM users; 
@@ -12,3 +12,6 @@ SELECT * FROM chirps ORDER by created_at;
 
 -- name: GetOneUser :one
 SELECT * FROM chirps WHERE id=$1 ;
+
+-- name: GetOneUserByEmail :one
+SELECT * FROM users WHERE LOWER(email)=LOWER($1) ;
