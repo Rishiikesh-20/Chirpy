@@ -329,7 +329,6 @@ func (ac *apiConfig) loginFunc(w http.ResponseWriter,req *http.Request){
 	type requestBody struct{
 		Email string `json:"email"`
 		Password string `json:"password"`
-		Expires_in_seconds int `json:"expires_in_second"`
 	}
 	type returnError struct{
 		Error string `json:"error"`
@@ -367,11 +366,6 @@ func (ac *apiConfig) loginFunc(w http.ResponseWriter,req *http.Request){
 		return 
 	}
 
-	if params.Expires_in_seconds==0 || params.Expires_in_seconds>3600{
-		params.Expires_in_seconds=3600 
-	}
-
-
 	users,err:=ac.dbQueries.GetOneUserByEmail(req.Context(),params.Email)
 
 	if err!=nil{
@@ -402,7 +396,7 @@ func (ac *apiConfig) loginFunc(w http.ResponseWriter,req *http.Request){
 		return
 	}
 
-	token,err:=auth.MakeJWT(int(users.ID),ac.JWT_SECRET,time.Duration(params.Expires_in_seconds)*time.Second)
+	token,err:=auth.MakeJWT(int(users.ID),ac.JWT_SECRET,1*time.Hour)
 
 	if err!=nil{
 		respError.Error+=err.Error()
@@ -423,6 +417,29 @@ func (ac *apiConfig) loginFunc(w http.ResponseWriter,req *http.Request){
 		UpdatedAt      time.Time `json:"updated_at"`
 		hashedPassword string 
 		Token string `json:"token"`
+		RefreshedToken string `json:"refreshed_token"`
+	}
+
+	refresh:=auth.MakeRefreshToken()
+
+	refreshStruct:=database.CreateRefreshTokenParams{
+		Token: refresh,
+		ExpiresAt: time.Now().Add(time.Hour*24*60),
+		UserID: users.ID,
+	}
+
+	_,err1:=ac.dbQueries.CreateRefreshToken(req.Context(),refreshStruct)
+
+	if err1!=nil{
+		log.Println("Error:",err1)
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			w.WriteHeader(500)
+			log.Println("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(500)
+		w.Write(dat)
 	}
 
 	userDetails:=response2{}
@@ -433,6 +450,7 @@ func (ac *apiConfig) loginFunc(w http.ResponseWriter,req *http.Request){
 	userDetails.UpdatedAt=users.UpdatedAt
 	userDetails.hashedPassword=users.HashedPassword
 	userDetails.Token=token
+	userDetails.RefreshedToken=refresh
 
 	dat,err:=json.Marshal(userDetails)
 
@@ -445,6 +463,159 @@ func (ac *apiConfig) loginFunc(w http.ResponseWriter,req *http.Request){
 	w.Write(dat)
 }
 
+func (ac *apiConfig) GetNewToken(w http.ResponseWriter,req *http.Request){
+	type returnError struct{
+		Error string `json:"error"`
+	}
+	type responseBody struct{
+		Token string `json:"token"`
+	}
+	respError:=returnError{
+		Error: "Something went wrong",
+	}
+
+	token,err:=auth.GetBearerToken(req.Header)
+	if err!=nil{
+		respError.Error+=err.Error()
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			w.WriteHeader(500)
+			log.Println("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	res,err:=ac.dbQueries.GetUserFromRefreshToken(req.Context(),token)
+
+	if err!=nil{
+		log.Println(err)
+		respError.Error+=": Not found"
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			w.WriteHeader(500)
+			log.Println("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	if res.Token=="" {
+		respError.Error+=": Token is not there"
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			w.WriteHeader(500)
+			log.Println("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+	log.Println(res.RevokedAt)
+	if  res.RevokedAt.Valid{
+		respError.Error+=": Revoked Refresh Token"
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			w.WriteHeader(500)
+			log.Println("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	if  res.ExpiresAt.Before(time.Now()) {
+		respError.Error+=": Expired Refresh token"
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			w.WriteHeader(500)
+			log.Println("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	tokenJWT,err:=auth.MakeJWT(int(res.UserID),ac.JWT_SECRET,1*time.Hour)
+
+	if err!=nil{
+		log.Println(err)
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			w.WriteHeader(500)
+			log.Println("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	tokenStruct:=responseBody{
+		Token:tokenJWT,
+	}
+
+	dat,err:=json.Marshal(tokenStruct)
+	if err!=nil{
+		w.WriteHeader(500)
+		log.Println("Error marshalling JSON: %s", err)
+		return
+	}
+
+	w.WriteHeader(200)
+	w.Write(dat)
+
+}
+
+func (ac *apiConfig) revokeTheToken(w http.ResponseWriter,req *http.Request){
+	type returnError struct{
+		Error string `json:"error"`
+	}
+	respError:=returnError{
+		Error: "Something went wrong",
+	}
+
+	token,err:=auth.GetBearerToken(req.Header)
+	if err!=nil{
+		respError.Error+=err.Error()
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			w.WriteHeader(500)
+			log.Println("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	err=ac.dbQueries.RevokeRefreshToken(req.Context(),token)
+
+	if err!=nil{
+		log.Println(err)
+		respError.Error+=": Not found"
+		dat,err:=json.Marshal(respError)
+		if err!=nil{
+			w.WriteHeader(500)
+			log.Println("Error marshalling JSON: %s", err)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	w.WriteHeader(204)
+	return
+
+}
 func main(){
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -484,10 +655,8 @@ func main(){
 	mux.HandleFunc("POST /api/chirps",ac.validate_chirp)
 	mux.HandleFunc("POST /api/users",ac.createUser)
 	mux.HandleFunc("POST /api/login",ac.loginFunc)
-
-	
-
-
+	mux.HandleFunc("POST /api/refresh",ac.GetNewToken)
+	mux.HandleFunc("POST /api/revoke",ac.revokeTheToken)
 
 	log.Println("Server started at port 8080")
 
